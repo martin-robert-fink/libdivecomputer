@@ -36,7 +36,7 @@ class Libdivecomputer {
           break;
 
         case 'onDive':
-          final args = call.arguments as Map<String, dynamic>;
+          final args = Map<String, dynamic>.from(call.arguments as Map);
           final dive = DiveData.fromMap(args);
           _onDive?.call(dive);
           break;
@@ -48,7 +48,7 @@ class Libdivecomputer {
           break;
 
         case 'onDeviceInfo':
-          final args = call.arguments as Map<String, dynamic>;
+          final args = Map<String, dynamic>.from(call.arguments as Map);
           final info = DeviceInfo.fromMap(args);
           _onDeviceInfo?.call(info);
           break;
@@ -69,7 +69,11 @@ class Libdivecomputer {
       if (result == null) return [];
 
       return result
-          .map((item) => DescriptorInfo.fromMap(item as Map<String, dynamic>))
+          .map(
+            (item) => DescriptorInfo.fromMap(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
           .toList();
     } catch (e) {
       debugPrint('Error getting descriptors: $e');
