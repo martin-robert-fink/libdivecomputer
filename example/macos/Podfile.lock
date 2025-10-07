@@ -22,7 +22,7 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   flutter_blue_plus_darwin: 904ed52825285a15f60e9d90312337a09f11a785
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
-  libdivecomputer: 399c5ba254945f7f5dedbbe444daaf09a18d00cf
+  libdivecomputer: 48d702e5790cb77e135061e458dc7928669de2ad
 
 PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
 

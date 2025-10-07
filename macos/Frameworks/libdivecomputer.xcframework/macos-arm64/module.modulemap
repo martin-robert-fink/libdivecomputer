@@ -1,0 +1,5 @@
+framework module libdivecomputer {
+    umbrella header "libdivecomputer.h"
+    export *
+    module * { export * }
+}

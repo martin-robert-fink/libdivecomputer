@@ -14,16 +14,13 @@ A Flutter plugin that wraps the libdivecomputer C library for macOS.
   s.platform = :osx, '10.13'
 
   s.pod_target_xcconfig = { 
-  'DEFINES_MODULE' => 'YES',
-  'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/Frameworks/libdivecomputer.xcframework/macos-arm64/Headers"',
-  'USER_HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/Frameworks/libdivecomputer.xcframework/macos-arm64/Headers"'
+    'DEFINES_MODULE' => 'YES'
   }
-
-  s.public_header_files = 'Classes/libdivecomputer.h'
+  
   s.swift_version = '5.0'
-  # Use vendored_libraries for .a files, not vendored_frameworks
-  s.vendored_libraries = 'Frameworks/libdivecomputer.xcframework/macos-arm64/libdivecomputer.a'
-  s.preserve_paths = 'Frameworks/libdivecomputer.xcframework/**/*'
+  
+  # XCFramework (contains static library)
+  s.vendored_frameworks = 'Frameworks/libdivecomputer.xcframework'
   
   # System frameworks
   s.frameworks = 'Foundation', 'CoreBluetooth'
