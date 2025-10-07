@@ -48,12 +48,12 @@ class DiveComputerBridge {
         }
         
         defer {
-            dc_descriptor_iterator_free(iterator)
+            dc_iterator_free(iterator)
         }
         
         while true {
             var desc: OpaquePointer?
-            let status = dc_descriptor_iterator_next(iterator, &desc)
+            let status = dc_iterator_next(iterator, &desc)
             
             if status != DC_STATUS_SUCCESS || desc == nil {
                 break
@@ -114,14 +114,14 @@ class DiveComputerBridge {
         }
         
         defer {
-            dc_descriptor_iterator_free(iterator)
+            dc_iterator_free(iterator)
         }
         
         var foundDescriptor: OpaquePointer?
         
         while true {
             var desc: OpaquePointer?
-            let status = dc_descriptor_iterator_next(iterator, &desc)
+            let status = dc_iterator_next(iterator, &desc)
             
             if status != DC_STATUS_SUCCESS || desc == nil {
                 break
