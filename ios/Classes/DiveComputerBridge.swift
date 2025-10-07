@@ -1,0 +1,376 @@
+import Foundation
+import Flutter
+
+/// Bridge between Flutter/BLE and libdivecomputer C library
+/// Implements custom I/O callbacks based on Subsurface methodology
+class DiveComputerBridge {
+    private var context: OpaquePointer?
+    private var device: OpaquePointer?
+    private var descriptor: OpaquePointer?
+    fileprivate var bleManager: BLEManager?
+    private weak var channel: FlutterMethodChannel?
+    
+    init(channel: FlutterMethodChannel?) {
+        self.channel = channel
+        initializeContext()
+    }
+    
+    deinit {
+        closeDevice()
+        if let ctx = context {
+            dc_context_free(ctx)
+        }
+    }
+    
+    // MARK: - Initialization
+    
+    private func initializeContext() {
+        var ctx: OpaquePointer?
+        let status = dc_context_new(&ctx)
+        
+        if status == DC_STATUS_SUCCESS {
+            context = ctx
+            debugPrint("DiveComputerBridge: Context initialized")
+        } else {
+            debugPrint("DiveComputerBridge: Failed to initialize context: \(status)")
+        }
+    }
+    
+    // MARK: - Descriptors
+    
+    func getDescriptors() -> [[String: Any]] {
+        var descriptors: [[String: Any]] = []
+        var iterator: OpaquePointer?
+        
+        guard dc_descriptor_iterator(&iterator) == DC_STATUS_SUCCESS else {
+            debugPrint("DiveComputerBridge: Failed to create descriptor iterator")
+            return []
+        }
+        
+        defer {
+            dc_descriptor_iterator_free(iterator)
+        }
+        
+        while true {
+            var desc: OpaquePointer?
+            let status = dc_descriptor_iterator_next(iterator, &desc)
+            
+            if status != DC_STATUS_SUCCESS || desc == nil {
+                break
+            }
+            
+            let vendor = String(cString: dc_descriptor_get_vendor(desc))
+            let product = String(cString: dc_descriptor_get_product(desc))
+            let model = dc_descriptor_get_model(desc)
+            let transports = dc_descriptor_get_transports(desc)
+            
+            var transportList: [Int] = []
+            if transports & DC_TRANSPORT_SERIAL.rawValue != 0 {
+                transportList.append(1)
+            }
+            if transports & DC_TRANSPORT_USBHID.rawValue != 0 {
+                transportList.append(2)
+            }
+            if transports & DC_TRANSPORT_BLUETOOTH.rawValue != 0 {
+                transportList.append(5)
+            }
+            if transports & DC_TRANSPORT_BLE.rawValue != 0 {
+                transportList.append(6)
+            }
+            
+            descriptors.append([
+                "vendor": vendor,
+                "product": product,
+                "model": Int(model),
+                "transports": transportList
+            ])
+            
+            dc_descriptor_free(desc)
+        }
+        
+        debugPrint("DiveComputerBridge: Found \(descriptors.count) descriptors")
+        return descriptors
+    }
+    
+    // MARK: - Device Operations
+    
+    func setupBLEDevice(deviceId: String) -> Int {
+        bleManager = BLEManager()
+        // Note: BLE device setup happens in Flutter via flutter_blue_plus
+        // This just initializes our manager
+        return 0  // DC_STATUS_SUCCESS
+    }
+    
+    func openDevice(vendor: String, product: String, deviceId: String) -> Int {
+        guard let ctx = context else {
+            debugPrint("DiveComputerBridge: No context")
+            return -1
+        }
+        
+        // Find matching descriptor
+        var iterator: OpaquePointer?
+        guard dc_descriptor_iterator(&iterator) == DC_STATUS_SUCCESS else {
+            return -1
+        }
+        
+        defer {
+            dc_descriptor_iterator_free(iterator)
+        }
+        
+        var foundDescriptor: OpaquePointer?
+        
+        while true {
+            var desc: OpaquePointer?
+            let status = dc_descriptor_iterator_next(iterator, &desc)
+            
+            if status != DC_STATUS_SUCCESS || desc == nil {
+                break
+            }
+            
+            let descVendor = String(cString: dc_descriptor_get_vendor(desc))
+            let descProduct = String(cString: dc_descriptor_get_product(desc))
+            
+            if descVendor == vendor && descProduct == product {
+                foundDescriptor = desc
+                break
+            }
+            
+            dc_descriptor_free(desc)
+        }
+        
+        guard let desc = foundDescriptor else {
+            debugPrint("DiveComputerBridge: Descriptor not found")
+            return -1
+        }
+        
+        self.descriptor = desc
+        
+        // Create custom I/O callbacks for BLE
+        var customCallbacks = dc_custom_cbs_t(
+            userdata: Unmanaged.passUnretained(self).toOpaque(),
+            set_timeout: customSetTimeout,
+            read: customRead,
+            write: customWrite,
+            close: customClose,
+            get_available: customGetAvailable
+        )
+        
+        // Open device with custom I/O
+        var iostream: OpaquePointer?
+        let status = dc_custom_open(
+            &iostream,
+            ctx,
+            DC_TRANSPORT_BLE.rawValue,
+            &customCallbacks
+        )
+        
+        if status != DC_STATUS_SUCCESS {
+            debugPrint("DiveComputerBridge: Failed to open custom iostream: \(status)")
+            return Int(status)
+        }
+        
+        // Open device
+        var dev: OpaquePointer?
+        let devStatus = dc_device_open(&dev, ctx, desc, iostream)
+        
+        if devStatus != DC_STATUS_SUCCESS {
+            debugPrint("DiveComputerBridge: Failed to open device: \(devStatus)")
+            dc_iostream_close(iostream)
+            return Int(devStatus)
+        }
+        
+        device = dev
+        debugPrint("DiveComputerBridge: Device opened successfully")
+        
+        return 0  // DC_STATUS_SUCCESS
+    }
+    
+    func closeDevice() {
+        if let dev = device {
+            dc_device_close(dev)
+            device = nil
+        }
+        
+        if let desc = descriptor {
+            dc_descriptor_free(desc)
+            descriptor = nil
+        }
+        
+        bleManager = nil
+    }
+    
+    func downloadDives() -> Int {
+        guard let dev = device else {
+            debugPrint("DiveComputerBridge: No device open")
+            return -1
+        }
+        
+        let userdata = Unmanaged.passUnretained(self).toOpaque()
+        
+        let status = dc_device_foreach(dev, diveCallback, userdata)
+        
+        debugPrint("DiveComputerBridge: Download completed with status: \(status)")
+        
+        return Int(status)
+    }
+    
+    // MARK: - Version
+    
+    static func getLibraryVersion() -> String {
+        return String(cString: dc_version(nil))
+    }
+    
+    // MARK: - Callbacks
+    
+    private func sendProgress(current: Int, total: Int) {
+        DispatchQueue.main.async { [weak self] in
+            self?.channel?.invokeMethod("onProgress", arguments: [
+                "current": current,
+                "total": total
+            ])
+        }
+    }
+    
+    fileprivate func sendDive(_ diveData: [String: Any]) {
+        DispatchQueue.main.async { [weak self] in
+            self?.channel?.invokeMethod("onDive", arguments: diveData)
+        }
+    }
+    
+    private func sendLog(_ message: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.channel?.invokeMethod("onLog", arguments: message)
+        }
+    }
+}
+
+// MARK: - Custom I/O Callbacks
+
+/// Set timeout for I/O operations
+private func customSetTimeout(
+    iostream: OpaquePointer?,
+    timeout: Int32,
+    userdata: UnsafeMutableRawPointer?
+) -> dc_status_t {
+    debugPrint("CustomIO: Set timeout to \(timeout)ms")
+    return DC_STATUS_SUCCESS
+}
+
+/// Read data from BLE device
+private func customRead(
+    iostream: OpaquePointer?,
+    data: UnsafeMutableRawPointer?,
+    size: Int,
+    actual: UnsafeMutablePointer<Int>?,
+    userdata: UnsafeMutableRawPointer?
+) -> dc_status_t {
+    guard let userdata = userdata,
+          let data = data else {
+        return DC_STATUS_INVALIDARGS
+    }
+    
+    let bridge = Unmanaged<DiveComputerBridge>.fromOpaque(userdata).takeUnretainedValue()
+    
+    guard let bleManager = bridge.bleManager else {
+        return DC_STATUS_IO
+    }
+    
+    // Try to read from BLE queue
+    if let readData = bleManager.read(maxLength: size) {
+        readData.copyBytes(to: data.assumingMemoryBound(to: UInt8.self), count: readData.count)
+        actual?.pointee = readData.count
+        debugPrint("CustomIO: Read \(readData.count) bytes")
+        return DC_STATUS_SUCCESS
+    }
+    
+    // No data available yet
+    actual?.pointee = 0
+    return DC_STATUS_TIMEOUT
+}
+
+/// Write data to BLE device
+private func customWrite(
+    iostream: OpaquePointer?,
+    data: UnsafeRawPointer?,
+    size: Int,
+    actual: UnsafeMutablePointer<Int>?,
+    userdata: UnsafeMutableRawPointer?
+) -> dc_status_t {
+    guard let userdata = userdata,
+          let data = data else {
+        return DC_STATUS_INVALIDARGS
+    }
+    
+    let bridge = Unmanaged<DiveComputerBridge>.fromOpaque(userdata).takeUnretainedValue()
+    
+    guard let bleManager = bridge.bleManager else {
+        return DC_STATUS_IO
+    }
+    
+    let writeData = Data(bytes: data, count: size)
+    bleManager.write(writeData)
+    actual?.pointee = size
+    
+    debugPrint("CustomIO: Wrote \(size) bytes")
+    return DC_STATUS_SUCCESS
+}
+
+/// Close I/O stream
+private func customClose(
+    iostream: OpaquePointer?,
+    userdata: UnsafeMutableRawPointer?
+) -> dc_status_t {
+    debugPrint("CustomIO: Close")
+    return DC_STATUS_SUCCESS
+}
+
+/// Get available bytes in receive buffer
+private func customGetAvailable(
+    iostream: OpaquePointer?,
+    available: UnsafeMutablePointer<Int>?,
+    userdata: UnsafeMutableRawPointer?
+) -> dc_status_t {
+    guard let userdata = userdata else {
+        return DC_STATUS_INVALIDARGS
+    }
+    
+    let bridge = Unmanaged<DiveComputerBridge>.fromOpaque(userdata).takeUnretainedValue()
+    
+    if let bleManager = bridge.bleManager {
+        available?.pointee = bleManager.available()
+    } else {
+        available?.pointee = 0
+    }
+    
+    return DC_STATUS_SUCCESS
+}
+
+// MARK: - Dive Callback
+
+private func diveCallback(
+    data: UnsafePointer<UInt8>?,
+    size: Int,
+    fingerprint: UnsafePointer<UInt8>?,
+    fsize: Int,
+    userdata: UnsafeMutableRawPointer?
+) -> Int32 {
+    guard let userdata = userdata,
+          let data = data else {
+        return 1  // Continue
+    }
+    
+    let bridge = Unmanaged<DiveComputerBridge>.fromOpaque(userdata).takeUnretainedValue()
+    
+    // Parse dive data (simplified - real implementation would parse all fields)
+    var diveData: [String: Any] = [
+        "number": 1,  // Would come from parser
+        "dateTime": Date().timeIntervalSince1970 * 1000,
+        "duration": 1800,  // 30 minutes
+        "maxDepth": 18.5,
+        "samples": []
+    ]
+    
+    bridge.sendDive(diveData)
+    
+    return 1  // Continue with next dive
+}
