@@ -7,7 +7,7 @@ class DiveComputerBridge {
     private var context: OpaquePointer?
     private var device: OpaquePointer?
     private var descriptor: OpaquePointer?
-    fileprivate var bleManager: BLEManager?
+    internal var bleManager: BLEManager?  // Internal so LibdivecomputerPlugin can access it
     private weak var channel: FlutterMethodChannel?
     
     init(channel: FlutterMethodChannel?) {
@@ -95,9 +95,11 @@ class DiveComputerBridge {
     // MARK: - Device Operations
     
     func setupBLEDevice(deviceId: String) -> Int {
-        bleManager = BLEManager()
-        // Note: BLE device setup happens in Flutter via flutter_blue_plus
-        // This just initializes our manager
+        if bleManager == nil {
+            bleManager = BLEManager()
+            debugPrint("DiveComputerBridge: Created BLEManager")
+        }
+        // Actual setup happens in LibdivecomputerPlugin
         return 0  // DC_STATUS_SUCCESS
     }
     
