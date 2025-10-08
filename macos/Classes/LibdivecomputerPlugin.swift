@@ -121,11 +121,14 @@ public class LibdivecomputerPlugin: NSObject, FlutterPlugin {
     }
     
     private func handleDownloadDives(result: @escaping FlutterResult) {
+        // CRITICAL: Run libdivecomputer on BACKGROUND thread to avoid blocking main thread
+        // This prevents deadlock when custom I/O callbacks need to call Flutter on main thread
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
             let status = self.bridge?.downloadDives() ?? -1
             
+            // CRITICAL: Return result on MAIN thread (required for Flutter)
             DispatchQueue.main.async {
                 result(status)
             }
