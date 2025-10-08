@@ -95,24 +95,42 @@ class _DiveComputerPageState extends State<DiveComputerPage> {
 
     setState(() {
       _isScanning = true;
-      _status = 'Scanning for devices...';
+      _status = 'Scanning for dive computers...';
       _scanResults.clear();
     });
 
     try {
-      // Start scan with flutter_blue_plus
-      await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 10),
-        androidUsesFineLocation: true,
-      );
+      // Known dive computer manufacturer names for filtering
+      const diveComputerNames = [
+        'Petrel', 'Perdix', 'Teric', 'Peregrine', 'Shearwater',
+        'Suunto', 'EON', 'D5', 'Vyper', 'Zoop',
+        'Mares', 'Smart', 'Genius', 'Quad', 'Puck',
+        'Oceanic', 'Pro Plus', 'Geo', 'Atom', 'VT',
+        'Aqua Lung', 'i300', 'i200', 'i750',
+        'Cressi', 'Leonardo', 'Giotto', 'Newton',
+        'Scubapro', 'G2', 'Aladin', 'Galileo',
+        'Ratio', 'iX3M', 'iDive',
+        'Heinrichs Weikamp', 'OSTC',
+      ];
 
-      // Listen to scan results
-      FlutterBluePlus.onScanResults.listen(
+      // Set up scan result listener BEFORE starting scan
+      final scanSubscription = FlutterBluePlus.onScanResults.listen(
         (results) {
           if (results.isNotEmpty) {
+            // Filter for dive computers only
+            final filteredResults = results.where((result) {
+              final name = result.device.platformName;
+              if (name.isEmpty) return false;
+              
+              // Check if name contains any known manufacturer/model
+              return diveComputerNames.any(
+                (dcName) => name.toUpperCase().contains(dcName.toUpperCase())
+              );
+            }).toList();
+
             setState(() {
-              _scanResults = results;
-              _status = 'Found ${results.length} devices';
+              _scanResults = filteredResults;
+              _status = 'Found ${filteredResults.length} dive computer(s)';
             });
           }
         },
@@ -122,15 +140,24 @@ class _DiveComputerPageState extends State<DiveComputerPage> {
         },
       );
 
+      // Start scan
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 10),
+        androidUsesFineLocation: true,
+      );
+
       // Wait for scan to complete
       await Future.delayed(const Duration(seconds: 10));
       await FlutterBluePlus.stopScan();
+      
+      // Cancel subscription
+      await scanSubscription.cancel();
 
       setState(() {
         _isScanning = false;
         _status = _scanResults.isEmpty
-            ? 'No devices found'
-            : 'Select a device to connect';
+            ? 'No dive computers found'
+            : 'Select a dive computer to connect';
       });
     } catch (e) {
       setState(() {
@@ -144,8 +171,11 @@ class _DiveComputerPageState extends State<DiveComputerPage> {
     setState(() => _status = 'Connecting to ${device.platformName}...');
 
     try {
-      await _libdc.connectToDevice(device);
-
+      // DON'T connect with flutter_blue_plus - let native plugin do it
+      // The native plugin needs to connect with its own CBCentralManager
+      // to receive delegate callbacks
+      
+      // Just call setupBLEDevice - it will handle the connection
       await _libdc.setupBLEDevice(device);
 
       setState(() {

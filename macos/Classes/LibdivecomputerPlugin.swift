@@ -152,32 +152,21 @@ public class LibdivecomputerPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // Try to retrieve already-connected peripherals (from flutter_blue_plus)
-        // First, we need to know which services to look for
-        // For dive computers, we'll scan all connected peripherals
-        let connectedPeripherals = centralManager?.retrieveConnectedPeripherals(withServices: [])
-        debugPrint("LibDC: Found \(connectedPeripherals?.count ?? 0) connected peripherals")
-        
-        // Find the one matching our UUID
-        if let peripheral = connectedPeripherals?.first(where: { $0.identifier == uuid }) {
-            debugPrint("LibDC: Found connected peripheral: \(peripheral.name ?? "unknown")")
-            discoveredPeripherals[deviceId] = peripheral
-            setupPeripheralForBridge(peripheral: peripheral, result: result)
-            return
-        }
-        
-        // If not connected, try to retrieve known peripherals
+        // Try to retrieve the peripheral (flutter_blue_plus already scanned it)
         let peripherals = centralManager?.retrievePeripherals(withIdentifiers: [uuid])
         if let peripheral = peripherals?.first {
-            debugPrint("LibDC: Retrieved known peripheral, connecting...")
+            debugPrint("LibDC: Retrieved peripheral: \(peripheral.name ?? "unknown"), state: \(peripheral.state.rawValue)")
             discoveredPeripherals[deviceId] = peripheral
             
-            // Connect if not already connected
+            // Connect with OUR central manager (not flutter_blue_plus)
             if peripheral.state != .connected {
+                debugPrint("LibDC: Connecting with our central manager...")
                 centralManager?.connect(peripheral, options: nil)
+                
                 // Wait for connection
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                     if peripheral.state == .connected {
+                        debugPrint("LibDC: Connected successfully")
                         self.setupPeripheralForBridge(peripheral: peripheral, result: result)
                     } else {
                         debugPrint("LibDC: Connection timeout")
@@ -185,13 +174,15 @@ public class LibdivecomputerPlugin: NSObject, FlutterPlugin {
                     }
                 }
             } else {
+                // Already connected (shouldn't happen now since flutter_blue_plus won't connect)
+                debugPrint("LibDC: Peripheral already connected")
                 setupPeripheralForBridge(peripheral: peripheral, result: result)
             }
             return
         }
         
         // Not found
-        debugPrint("LibDC: Peripheral not found. Ensure device is connected via flutter_blue_plus first.")
+        debugPrint("LibDC: Peripheral not found. Ensure device was discovered during scan.")
         result(-1)
     }
     
