@@ -354,16 +354,17 @@ private func customWrite(
     
     let writeData = Data(bytes: data, count: size)
     
-    // CRITICAL: CoreBluetooth operations MUST happen on main thread
-    // Use a semaphore to wait for the write to complete
+    // CRITICAL: Wait for write completion with proper callback
+    // CoreBluetooth operations MUST happen on main thread
     let semaphore = DispatchSemaphore(value: 0)
     var writeSuccess = false
     
     DispatchQueue.main.async {
         debugPrint("CustomIO: Writing \(writeData.count) bytes on main thread")
-        bleManager.write(writeData)
-        writeSuccess = true
-        semaphore.signal()
+        bleManager.write(writeData) { success in
+            writeSuccess = success
+            semaphore.signal()
+        }
     }
     
     // Wait for write to complete (with timeout)

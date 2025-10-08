@@ -10,6 +10,7 @@ class BLEManager: NSObject {
     private var receiveQueue: Data = Data()
     private var lastWriteData: Data?  // Track last write for echo filtering
     private let queueLock = NSLock()
+    private var writeCompletion: ((Bool) -> Void)?  // Write completion handler
     
     // Callbacks for custom I/O
     var onDataReceived: ((Data) -> Void)?
@@ -28,9 +29,10 @@ class BLEManager: NSObject {
     }
     
     /// Write data to device
-    func write(_ data: Data) {
+    func write(_ data: Data, completion: @escaping (Bool) -> Void) {
         guard let characteristic = writeCharacteristic else {
             debugPrint("BLEManager: No write characteristic")
+            completion(false)
             return
         }
         
@@ -39,13 +41,14 @@ class BLEManager: NSObject {
         // The BLE write is being echoed back into the read queue, 
         // causing libdivecomputer to read garbage data
         lastWriteData = data
+        writeCompletion = completion  // Store completion handler
         queueLock.unlock()
         
         debugPrint("BLEManager: Writing \(data.count) bytes")
         peripheral?.writeValue(
             data,
             for: characteristic,
-            type: .withResponse
+            type: .withResponse  // MUST use withResponse to get completion callback
         )
     }
     
@@ -125,21 +128,33 @@ extension BLEManager: CBPeripheralDelegate {
             debugPrint("BLEManager: Characteristic \(characteristic.uuid)")
             debugPrint("  Properties: \(characteristic.properties)")
             
-            // Find write characteristic
-            if characteristic.properties.contains(.write) ||
-               characteristic.properties.contains(.writeWithoutResponse) {
+            // For Shearwater and many dive computers, ONE characteristic handles BOTH read and write
+            let canWrite = characteristic.properties.contains(.write) ||
+                           characteristic.properties.contains(.writeWithoutResponse)
+            let canNotify = characteristic.properties.contains(.notify) ||
+                            characteristic.properties.contains(.indicate)
+            
+            // If it can write, use it for writing
+            if canWrite {
                 writeCharacteristic = characteristic
                 debugPrint("BLEManager: Found write characteristic")
             }
             
-            // Find read/notify characteristic
-            if characteristic.properties.contains(.notify) ||
-               characteristic.properties.contains(.indicate) {
+            // If it can notify, enable notifications AND use for reading
+            if canNotify {
                 readCharacteristic = characteristic
                 
                 // Enable notifications
                 debugPrint("BLEManager: Enabling notifications")
                 peripheral.setNotifyValue(true, for: characteristic)
+            }
+            
+            // CRITICAL: If it's BOTH write AND notify (Shearwater case),
+            // make sure we use the same characteristic for both
+            if canWrite && canNotify {
+                writeCharacteristic = characteristic
+                readCharacteristic = characteristic
+                debugPrint("BLEManager: Using same characteristic for read/write (Shearwater pattern)")
             }
         }
     }
@@ -186,11 +201,18 @@ extension BLEManager: CBPeripheralDelegate {
         didWriteValueFor characteristic: CBCharacteristic,
         error: Error?
     ) {
+        queueLock.lock()
+        let completion = writeCompletion
+        writeCompletion = nil
+        queueLock.unlock()
+        
         if let error = error {
             debugPrint("BLEManager: Error writing value: \(error)")
             onError?(error)
+            completion?(false)
         } else {
             debugPrint("BLEManager: Write completed")
+            completion?(true)
         }
     }
     
