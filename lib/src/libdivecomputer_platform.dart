@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -10,12 +12,17 @@ import 'enums/status_code.dart';
 /// Main interface to libdivecomputer functionality
 class Libdivecomputer {
   static const MethodChannel _channel = MethodChannel('libdivecomputer');
+  static const MethodChannel _bleChannel = MethodChannel('libdivecomputer_ble');
 
   /// Singleton instance
   static final Libdivecomputer instance = Libdivecomputer._();
 
+  // Store current BLE characteristic for read/write operations
+  BluetoothCharacteristic? _currentCharacteristic;
+
   Libdivecomputer._() {
     _channel.setMethodCallHandler(_handleMethodCall);
+    _bleChannel.setMethodCallHandler(_handleBLEMethodCall);
   }
 
   // Callbacks
@@ -58,6 +65,83 @@ class Libdivecomputer {
       }
     } catch (e) {
       debugPrint('Error handling method call: $e');
+    }
+  }
+
+  /// Handle BLE method calls from native platform
+  Future<dynamic> _handleBLEMethodCall(MethodCall call) async {
+    try {
+      switch (call.method) {
+        case 'ble_read':
+          return await _handleBLERead(call.arguments as Map);
+
+        case 'ble_write':
+          return await _handleBLEWrite(call.arguments as Map);
+
+        default:
+          debugPrint('Unknown BLE method: ${call.method}');
+          return {'success': false, 'error': 'UNKNOWN_METHOD'};
+      }
+    } catch (e) {
+      debugPrint('Error handling BLE method call: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Handle BLE read request from native code
+  Future<Map<String, dynamic>> _handleBLERead(Map args) async {
+    final timeoutMs = args['timeoutMs'] as int? ?? 5000;
+
+    try {
+      if (_currentCharacteristic == null) {
+        debugPrint('BLE: No characteristic available for read');
+        return {'success': false, 'error': 'NO_CHARACTERISTIC'};
+      }
+
+      // Read with timeout
+      final data = await _currentCharacteristic!
+          .read()
+          .timeout(Duration(milliseconds: timeoutMs));
+
+      debugPrint('BLE: Read ${data.length} bytes from Dart');
+      
+      return {
+        'success': true,
+        'data': data,
+      };
+    } on TimeoutException {
+      debugPrint('BLE: Read timeout');
+      return {'success': false, 'error': 'TIMEOUT'};
+    } catch (e) {
+      debugPrint('BLE: Read error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Handle BLE write request from native code
+  Future<Map<String, dynamic>> _handleBLEWrite(Map args) async {
+    final data = (args['data'] as List).cast<int>();
+
+    try {
+      if (_currentCharacteristic == null) {
+        debugPrint('BLE: No characteristic available for write');
+        return {'success': false, 'error': 'NO_CHARACTERISTIC'};
+      }
+
+      debugPrint('BLE: Writing ${data.length} bytes from Dart');
+
+      // Write with response
+      await _currentCharacteristic!.write(
+        data,
+        withoutResponse: false,
+      );
+
+      debugPrint('BLE: Write complete from Dart');
+
+      return {'success': true};
+    } catch (e) {
+      debugPrint('BLE: Write error: $e');
+      return {'success': false, 'error': e.toString()};
     }
   }
 
@@ -224,8 +308,47 @@ class Libdivecomputer {
   }
 
   /// Setup BLE device for libdivecomputer communication
-  Future<StatusCode> setupBLEDevice(BluetoothDevice device) async {
+  /// 
+  /// This method should be called AFTER connecting with flutter_blue_plus
+  /// and discovering services/characteristics.
+  Future<StatusCode> setupBLEDevice(
+    BluetoothDevice device, {
+    BluetoothCharacteristic? characteristic,
+  }) async {
     try {
+      // If no characteristic provided, try to find it
+      if (characteristic == null) {
+        final services = await device.discoverServices();
+        
+        // Find a characteristic that supports both write and notify
+        for (final service in services) {
+          for (final char in service.characteristics) {
+            final canWrite = char.properties.write || char.properties.writeWithoutResponse;
+            final canNotify = char.properties.notify || char.properties.indicate;
+            
+            if (canWrite && canNotify) {
+              characteristic = char;
+              debugPrint('Found suitable characteristic: ${char.uuid}');
+              break;
+            }
+          }
+          if (characteristic != null) break;
+        }
+        
+        if (characteristic == null) {
+          debugPrint('No suitable characteristic found');
+          return StatusCode.unknown;
+        }
+      }
+
+      // Store for BLE operations
+      _currentCharacteristic = characteristic;
+
+      // Enable notifications
+      await characteristic.setNotifyValue(true);
+      debugPrint('Enabled notifications on characteristic');
+
+      // Call native setup
       final result = await _channel.invokeMethod<int>('setupBLEDevice', {
         'deviceId': device.remoteId.toString(),
       });

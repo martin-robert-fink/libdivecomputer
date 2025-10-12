@@ -102,15 +102,43 @@ class _DiveComputerPageState extends State<DiveComputerPage> {
     try {
       // Known dive computer manufacturer names for filtering
       const diveComputerNames = [
-        'Petrel', 'Perdix', 'Teric', 'Peregrine', 'Shearwater',
-        'Suunto', 'EON', 'D5', 'Vyper', 'Zoop',
-        'Mares', 'Smart', 'Genius', 'Quad', 'Puck',
-        'Oceanic', 'Pro Plus', 'Geo', 'Atom', 'VT',
-        'Aqua Lung', 'i300', 'i200', 'i750',
-        'Cressi', 'Leonardo', 'Giotto', 'Newton',
-        'Scubapro', 'G2', 'Aladin', 'Galileo',
-        'Ratio', 'iX3M', 'iDive',
-        'Heinrichs Weikamp', 'OSTC',
+        'Petrel',
+        'Perdix',
+        'Teric',
+        'Peregrine',
+        'Shearwater',
+        'Suunto',
+        'EON',
+        'D5',
+        'Vyper',
+        'Zoop',
+        'Mares',
+        'Smart',
+        'Genius',
+        'Quad',
+        'Puck',
+        'Oceanic',
+        'Pro Plus',
+        'Geo',
+        'Atom',
+        'VT',
+        'Aqua Lung',
+        'i300',
+        'i200',
+        'i750',
+        'Cressi',
+        'Leonardo',
+        'Giotto',
+        'Newton',
+        'Scubapro',
+        'G2',
+        'Aladin',
+        'Galileo',
+        'Ratio',
+        'iX3M',
+        'iDive',
+        'Heinrichs Weikamp',
+        'OSTC',
       ];
 
       // Set up scan result listener BEFORE starting scan
@@ -121,11 +149,10 @@ class _DiveComputerPageState extends State<DiveComputerPage> {
             final filteredResults = results.where((result) {
               final name = result.device.platformName;
               if (name.isEmpty) return false;
-              
+
               // Check if name contains any known manufacturer/model
-              return diveComputerNames.any(
-                (dcName) => name.toUpperCase().contains(dcName.toUpperCase())
-              );
+              return diveComputerNames.any((dcName) =>
+                  name.toUpperCase().contains(dcName.toUpperCase()));
             }).toList();
 
             setState(() {
@@ -149,7 +176,7 @@ class _DiveComputerPageState extends State<DiveComputerPage> {
       // Wait for scan to complete
       await Future.delayed(const Duration(seconds: 10));
       await FlutterBluePlus.stopScan();
-      
+
       // Cancel subscription
       await scanSubscription.cancel();
 
@@ -171,12 +198,61 @@ class _DiveComputerPageState extends State<DiveComputerPage> {
     setState(() => _status = 'Connecting to ${device.platformName}...');
 
     try {
-      // DON'T connect with flutter_blue_plus - let native plugin do it
-      // The native plugin needs to connect with its own CBCentralManager
-      // to receive delegate callbacks
-      
-      // Just call setupBLEDevice - it will handle the connection
-      await _libdc.setupBLEDevice(device);
+      // Connect with flutter_blue_plus
+      await device.connect(
+        license: License.free,
+        timeout: const Duration(seconds: 15),
+      );
+
+      setState(() => _status = 'Discovering services...');
+
+      // Discover services and find the characteristic
+      final services = await device.discoverServices();
+
+      BluetoothCharacteristic? targetCharacteristic;
+
+      for (final service in services) {
+        debugPrint('Service: ${service.uuid}');
+        for (final characteristic in service.characteristics) {
+          debugPrint('  Characteristic: ${characteristic.uuid}');
+          debugPrint(
+              '    Properties: write=${characteristic.properties.write}, '
+              'notify=${characteristic.properties.notify}');
+
+          // Find a characteristic that supports both write and notify
+          final canWrite = characteristic.properties.write ||
+              characteristic.properties.writeWithoutResponse;
+          final canNotify = characteristic.properties.notify ||
+              characteristic.properties.indicate;
+
+          if (canWrite && canNotify) {
+            targetCharacteristic = characteristic;
+            debugPrint('  -> Using this characteristic!');
+            break;
+          }
+        }
+        if (targetCharacteristic != null) break;
+      }
+
+      if (targetCharacteristic == null) {
+        setState(() => _status = 'No suitable characteristic found');
+        await device.disconnect();
+        return;
+      }
+
+      setState(() => _status = 'Setting up libdivecomputer...');
+
+      // Setup BLE device - this will enable notifications and store the characteristic
+      final status = await _libdc.setupBLEDevice(
+        device,
+        characteristic: targetCharacteristic,
+      );
+
+      if (status != StatusCode.success) {
+        setState(() => _status = 'Setup failed: ${status.description}');
+        await device.disconnect();
+        return;
+      }
 
       setState(() {
         _connectedDevice = device;
@@ -184,6 +260,9 @@ class _DiveComputerPageState extends State<DiveComputerPage> {
       });
     } catch (e) {
       setState(() => _status = 'Connection failed: $e');
+      try {
+        await device.disconnect();
+      } catch (_) {}
     }
   }
 
